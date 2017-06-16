@@ -49,7 +49,7 @@ from topology.generator import (
     INITIAL_TRC_VERSION,
     PATH_POLICY_FILE,
 )
-from topology.generator import PrometheusGenerator
+from topology.generator import PrometheusGenerator, _topo_json_to_yaml
 
 # SCION-WEB
 from ad_manager.models import AD
@@ -214,6 +214,10 @@ def write_topology_file(tp, type_key, instance_path):
     path = os.path.join(instance_path, 'topology.json')
     with open(path, 'w') as file:
         json.dump(tp, file, indent=2)
+    topo_yml = _topo_json_to_yaml(tp)
+    path = os.path.join(instance_path, 'topology.yml')
+    with open(path, 'w') as file:
+        yaml.dump(topo_yml, file, default_flow_style=False)
 
 
 def write_endhost_config(tp, isd_as, local_gen_path):

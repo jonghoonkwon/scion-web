@@ -55,7 +55,7 @@ from lib.defines import DEFAULT_MTU
 from lib.packet.scion_addr import ISD_AS
 from lib.types import LinkType
 from lib.util import iso_timestamp
-from topology.generator import INITIAL_CERT_VERSION, INITIAL_TRC_VERSION, _topo_json_to_yaml
+from topology.generator import INITIAL_CERT_VERSION, INITIAL_TRC_VERSION
 
 # SCION-WEB
 from ad_manager.forms import (
