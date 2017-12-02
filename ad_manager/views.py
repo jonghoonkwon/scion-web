@@ -21,7 +21,6 @@ import os
 import posixpath
 import socket
 import time
-import yaml
 from collections import deque
 from urllib.parse import urljoin
 
@@ -177,7 +176,7 @@ def poll_join_reply(request):
         logger.info('url = %s' % request_url)
         r, error = post_req_to_scion_coord(request_url, {'request_id': jr_id},
                                            "poll join reply %s" % jr_id)
-        if error is not None:
+        if error:
             return error
         handle_join_reply(request, r, jr_id)
     return redirect(current_page)
@@ -308,7 +307,7 @@ def send_join_reply(request, status, isd_as, request_id):
                           coord.secret))
     _, error = post_req_to_scion_coord(request_url, join_rep_dict,
                                        "join reply %s" % request_id)
-    if error is not None:
+    if error:
         return error
     return redirect(current_page)
 
@@ -324,12 +323,18 @@ def prep_approved_join_reply(request, join_rep_dict, own_isdas, own_as_obj):
     enc_pub_key = from_b64(request.POST['enc_pub_key'])
     signing_as_sig_priv_key = from_b64(own_as_obj.sig_priv_key)
     joining_ia = ISD_AS.from_values(own_isdas[0], joining_as)
+    if is_core.lower() == "true":
+        validity = Certificate.CORE_AS_VALIDITY_PERIOD
+        comment = "Core AS Certificate"
+    else:
+        validity = Certificate.AS_VALIDITY_PERIOD
+        comment = "AS Certificate"
     cert = Certificate.from_values(
-        str(joining_ia), str(own_isdas), INITIAL_TRC_VERSION, INITIAL_CERT_VERSION, "", False,
-        enc_pub_key, sig_pub_key, SigningKey(signing_as_sig_priv_key)
+        str(joining_ia), str(own_isdas), INITIAL_TRC_VERSION, INITIAL_CERT_VERSION, comment,
+        is_core, validity, enc_pub_key, sig_pub_key, SigningKey(signing_as_sig_priv_key)
     )
     respond_ia_chain = CertificateChain.from_raw(own_as_obj.certificate)
-    request_ia_chain = CertificateChain([cert, respond_ia_chain.certs[0]])
+    request_ia_chain = CertificateChain([cert, respond_ia_chain.core_as_cert])
     join_rep_dict['JoiningIA'] = str(joining_ia)
     join_rep_dict['IsCore'] = is_core.lower() == "true"
     join_rep_dict['RespondIA'] = str(own_isdas)
@@ -358,7 +363,7 @@ def request_join_isd(request):
     # get the account_id and secret necessary to query SCION-coord.
     coord = get_object_or_404(OrganisationAdmin, user_id=request.user.id)
     # generate the sign and encryption keys
-    private_key_sign, public_key_sign = generate_sign_keypair()
+    public_key_sign, private_key_sign = generate_sign_keypair()
     public_key_encr, private_key_encr = generate_enc_keypair()
     join_req = JoinRequest.objects.create(
         created_by=request.user,
@@ -381,7 +386,7 @@ def request_join_isd(request):
                           coord.secret))
     _, error = post_req_to_scion_coord(request_url, join_req_dict,
                                        "join request %s" % join_req.id)
-    if error is not None:
+    if error:
         return error
     logger.info("Request = %s, Join Request Dict = %s", request_url,
                 join_req_dict)
@@ -522,7 +527,7 @@ def send_connection_request(request, con_req, con_req_dict):
                           coord.secret))
     resp, error = post_req_to_scion_coord(request_url, con_req_dict,
                                           "connection request %s" % con_req_id)
-    if error is not None:
+    if error:
         return None, error
     logging.info("Connection request %s successfully sent.", con_req_id)
     # set the status of the connection request to SENT
@@ -593,7 +598,7 @@ def send_connection_reply(request, con_req_id, status, respond_as, data):
                           coord.secret))
     _, error = post_req_to_scion_coord(request_url, con_rep_dict,
                                        "connection reply %s" % con_req_id)
-    if error is not None:
+    if error:
         return error
     logging.info("Connection reply %s successfully sent.",
                  con_rep_dict['RequestId'])
@@ -658,7 +663,7 @@ class ADDetailView(DetailView):
         r, error = post_req_to_scion_coord(
             request_url, {'IsdAs': context['isdas']},
             "poll events for ISD-AS %s" % context['isdas'])
-        if error is not None:
+        if error:
             messages.error(self.request, 'Could not poll events from SCION '
                            'Coordination Service!')
             return context
@@ -675,10 +680,13 @@ def simple_configuration(request, isd_id, as_id):
     current_page = request.META.get('HTTP_REFERER')
     target_isdas = request.POST['inputTargetISDAS']
     host_IP = request.POST['inputHostIP']
-    yml_str = SimpleConfTemplate.substitute(
-        IP=host_IP, ISD_ID=isd_id, AS_ID=as_id,
-        TARGET_ISDAS=target_isdas)
-    topo_dict = yaml.load(yml_str)
+    json_str = SimpleConfTemplate.substitute(IP=host_IP, ISD_ID=isd_id, AS_ID=as_id,
+                                             TARGET_ISDAS=target_isdas)
+    try:
+        topo_dict = json.loads(json_str)
+    except ValueError:
+        logger.error("Decoding JSON for Simple Configuration failed.")
+        return redirect(current_page)
     as_obj = get_object_or_404(AD, isd_id=int(isd_id), as_id=int(as_id))
     as_obj.simple_conf_mode = True
     as_obj.save()
@@ -926,7 +934,7 @@ def name_entry_dict(name_l, address_l, port_l, addr_int_l, port_int_l):
                 'L4Port': st_int(port_l[i], SCION_SUGGESTED_PORT),
             }]
         }
-        if addr_int_l[i] is not '':
+        if addr_int_l[i]:
             ret_dict[name_l[i]]['Bind'] = [{
                 'Addr': addr_int_l[i],
                 'L4Port': st_int(port_int_l[i], None),
@@ -952,6 +960,8 @@ def name_entry_dict_router(tp):
     name_list = tp.getlist('inputBorderRouterName')
     address_list = tp.getlist('inputBorderRouterAddress')
     port_list = tp.getlist('inputBorderRouterPort')
+    internal_address_list = tp.getlist('inputBorderRouterInternalAddress')
+    internal_port_list = tp.getlist('inputBorderRouterInternalPort')
     interface_list = tp.getlist('inputInterfaceAddr')
     bandwidth_list = tp.getlist('inputInterfaceBandwidth')
     if_id_list = tp.getlist('inputInterfaceIFID')
@@ -961,6 +971,7 @@ def name_entry_dict_router(tp):
     remote_address_list = tp.getlist('inputInterfaceRemoteAddress')
     remote_port_list = tp.getlist('inputInterfaceRemotePort')
     own_port_list = tp.getlist('inputInterfaceOwnPort')
+    interface_internal_addr_list = tp.getlist('inputInterfaceInternalAddress')
     for i in range(len(name_list)):
         if address_list[i] == '':
             continue  # don't include empty entries
@@ -970,8 +981,6 @@ def name_entry_dict_router(tp):
                     'Addr': address_list[i],
                     'L4Port': st_int(port_list[i], None),
                 }],
-                # TODO(jonghoonkwon): Put the 'Bind' field after web UI
-                # provides internal address & port information
             }],
             'Interfaces': {
                 st_int(if_id_list[i], None): {
@@ -996,6 +1005,18 @@ def name_entry_dict_router(tp):
                 }
             }
         }
+        if internal_address_list[i]:
+            # TODO(jonghoonkwon): Initial version of scion web assumes that
+            # we have only one bind address. Need to be fixed.
+            ret_dict[name_list[i]]['InternalAddrs'][0]['Bind'] = [{
+                'Addr': internal_address_list[i],
+                'L4Port': st_int(internal_port_list[i], None),
+            }]
+        if interface_internal_addr_list[i]:
+            ret_dict[name_list[i]]['Interfaces'][st_int(if_id_list[i], None)]['Bind'] = {
+                'Addr': interface_internal_addr_list[i],
+                'L4Port': st_int(own_port_list[i], None),
+            }
     return ret_dict
 
 
@@ -1005,7 +1026,6 @@ def generate_topology(request):
     topology_params = request.POST.copy()
     topology_params.pop('csrfmiddlewaretoken',
                         None)  # remove csrf entry, as we don't need it here
-
     topo_dict = {}
     tp = topology_params
     isd_as = tp['inputISD_AS']
@@ -1045,7 +1065,6 @@ def generate_topology(request):
         int_key += 1
 
     topo_dict['ZookeeperService'] = zk_dict
-
     # IP:port uniqueness in AS check
     all_ip_port_pairs = get_all_ip_port_pairs(topo_dict, service_types)
     if len(all_ip_port_pairs) != len(set(all_ip_port_pairs)):
